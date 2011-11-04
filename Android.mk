@@ -1,5 +1,7 @@
 # This is the Android makefile for google3/third_party/libsrtp so that we can
 # build it with the Android NDK.
+ifneq ($(TARGET_ARCH),x86)
+
 LOCAL_PATH := $(call my-dir)
 
 common_SRC_FILES := \
@@ -26,12 +28,9 @@ include $(CLEAR_VARS)
 
 LOCAL_CPP_EXTENSION := .cc
 
-ifneq ($(TARGET_ARCH),x86)
-    LOCAL_NDK_VERSION := 5
-    LOCAL_SDK_VERSION := 9
-    LOCAL_NDK_STL_VARIANT := stlport_static
-endif
-
+LOCAL_NDK_VERSION := 5
+LOCAL_SDK_VERSION := 9
+LOCAL_NDK_STL_VARIANT := stlport_static
 
 LOCAL_SRC_FILES := $(common_SRC_FILES)
 LOCAL_CFLAGS += $(common_CFLAGS)
@@ -41,3 +40,5 @@ LOCAL_MODULE:= libyuv_static
 LOCAL_MODULE_TAGS := optional
 
 include $(BUILD_STATIC_LIBRARY)
+
+endif
