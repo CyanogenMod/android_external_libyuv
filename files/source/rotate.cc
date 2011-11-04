@@ -42,6 +42,7 @@ typedef void (*rotate_uv_wxh_func)(const uint8*, int,
 typedef void (*rotate_wx8_func)(const uint8*, int, uint8*, int, int);
 typedef void (*rotate_wxh_func)(const uint8*, int, uint8*, int, int, int);
 
+#if 0 // Need to add rotate_neon.s to the build to enable this
 #ifdef __ARM_NEON__
 extern "C" {
 void RestoreRegisters_NEON(unsigned long long *restore);
@@ -61,6 +62,7 @@ void TransposeUVWx8_NEON(const uint8* src, int src_stride,
                          uint8* dst_b, int dst_stride_b,
                          int width);
 }  // extern "C"
+#endif
 #endif
 
 #if defined(WIN32) && !defined(COVERAGE_ENABLED)
