@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2011 The LibYuv project authors. All Rights Reserved.
+ *  Copyright 2011 The LibYuv Project Authors. All rights reserved.
  *
  *  Use of this source code is governed by a BSD-style license
  *  that can be found in the LICENSE file in the root of the source
@@ -8,33 +8,26 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include "../unit_test/unit_test.h"
+
+#include <stdlib.h>  // For getenv()
+
 #include <cstring>
-#include "unit_test.h"
 
-class libyuvEnvironment : public ::testing::Environment {
- public:
-  virtual void SetUp() {
-  }
+// Change this to 1000 for benchmarking.
+// TODO(fbarchard): Add command line parsing to pass this as option.
+#define BENCHMARK_ITERATIONS 1
 
-  virtual void TearDown() {
-  }
-};
-
-libyuvTest::libyuvTest() :
-  _rotate_max_w(128),
-  _rotate_max_h(128) {
-}
-
-void libyuvTest::SetUp() {
-}
-
-void libyuvTest::TearDown() {
+libyuvTest::libyuvTest() : rotate_max_w_(128), rotate_max_h_(128),
+    benchmark_iterations_(BENCHMARK_ITERATIONS), benchmark_width_(1280),
+    benchmark_height_(720) {
+    const char* repeat = getenv("LIBYUV_REPEAT");
+    if (repeat) {
+      benchmark_iterations_ = atoi(repeat);  // NOLINT
+    }
 }
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
-  libyuvEnvironment* env = new libyuvEnvironment;
-  ::testing::AddGlobalTestEnvironment(env);
-
   return RUN_ALL_TESTS();
 }

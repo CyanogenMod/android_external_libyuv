@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2011 The LibYuv project authors. All Rights Reserved.
+ *  Copyright 2011 The LibYuv Project Authors. All rights reserved.
  *
  *  Use of this source code is governed by a BSD-style license
  *  that can be found in the LICENSE file in the root of the source
@@ -8,49 +8,44 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "libyuv/planar_functions.h"
 #include "libyuv/rotate.h"
-#include "rotate_priv.h"
 
 #include "libyuv/cpu_id.h"
+#include "libyuv/convert.h"
+#include "libyuv/planar_functions.h"
+#include "libyuv/row.h"
 
+#ifdef __cplusplus
 namespace libyuv {
-
-#if (defined(WIN32) || defined(__x86_64__) || defined(__i386__)) \
-    && !defined(COVERAGE_ENABLED) && !defined(TARGET_IPHONE_SIMULATOR)
-#if defined(_MSC_VER)
-#define TALIGN16(t, var) static __declspec(align(16)) t _ ## var
-#else
-#define TALIGN16(t, var) t var __attribute__((aligned(16)))
-#endif
-// Shuffle table for reversing the bytes.
-extern "C" TALIGN16(const uint8, kShuffleReverse[16]) =
-  { 15u, 14u, 13u, 12u, 11u, 10u, 9u, 8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u, 0u };
-// Shuffle table for reversing the bytes of UV channels.
-extern "C" TALIGN16(const uint8, kShuffleReverseUV[16]) =
-  { 14u, 12u, 10u, 8u, 6u, 4u, 2u, 0u, 15u, 13u, 11u, 9u, 7u, 5u, 3u, 1u };
-#endif
-
-typedef void (*reverse_uv_func)(const uint8*, uint8*, uint8*, int);
-typedef void (*reverse_func)(const uint8*, uint8*, int);
-typedef void (*rotate_uv_wx8_func)(const uint8*, int,
-                                   uint8*, int,
-                                   uint8*, int, int);
-typedef void (*rotate_uv_wxh_func)(const uint8*, int,
-                                   uint8*, int,
-                                   uint8*, int, int, int);
-typedef void (*rotate_wx8_func)(const uint8*, int, uint8*, int, int);
-typedef void (*rotate_wxh_func)(const uint8*, int, uint8*, int, int, int);
-
-#if 0 // Need to add rotate_neon.s to the build to enable this
-#ifdef __ARM_NEON__
 extern "C" {
-void RestoreRegisters_NEON(unsigned long long *restore);
-void SaveRegisters_NEON(unsigned long long *store);
-#define HAS_REVERSE_LINE_NEON
-void ReverseLine_NEON(const uint8* src, uint8* dst, int width);
-#define HAS_REVERSE_LINE_UV_NEON
-void ReverseLineUV_NEON(const uint8* src,
+#endif
+
+#if !defined(YUV_DISABLE_ASM) && \
+    (defined(_M_IX86) || defined(__x86_64__) || defined(__i386__))
+#if defined(__APPLE__) && defined(__i386__)
+#define DECLARE_FUNCTION(name)                                                 \
+    ".text                                     \n"                             \
+    ".private_extern _" #name "                \n"                             \
+    ".align 4,0x90                             \n"                             \
+"_" #name ":                                   \n"
+#elif defined(__MINGW32__) || defined(__CYGWIN__) && defined(__i386__)
+#define DECLARE_FUNCTION(name)                                                 \
+    ".text                                     \n"                             \
+    ".align 4,0x90                             \n"                             \
+"_" #name ":                                   \n"
+#else
+#define DECLARE_FUNCTION(name)                                                 \
+    ".text                                     \n"                             \
+    ".align 4,0x90                             \n"                             \
+#name ":                                       \n"
+#endif
+#endif
+
+#if !defined(YUV_DISABLE_ASM) && defined(__ARM_NEON__)
+#define HAS_MIRRORROW_NEON
+void MirrorRow_NEON(const uint8* src, uint8* dst, int width);
+#define HAS_MIRRORROW_UV_NEON
+void MirrorRowUV_NEON(const uint8* src,
                         uint8* dst_a, uint8* dst_b,
                         int width);
 #define HAS_TRANSPOSE_WX8_NEON
@@ -61,16 +56,14 @@ void TransposeUVWx8_NEON(const uint8* src, int src_stride,
                          uint8* dst_a, int dst_stride_a,
                          uint8* dst_b, int dst_stride_b,
                          int width);
-}  // extern "C"
-#endif
-#endif
+#endif  // defined(__ARM_NEON__)
 
-#if defined(WIN32) && !defined(COVERAGE_ENABLED)
+#if !defined(YUV_DISABLE_ASM) && defined(_M_IX86)
 #define HAS_TRANSPOSE_WX8_SSSE3
-__declspec(naked)
+__declspec(naked) __declspec(align(16))
 static void TransposeWx8_SSSE3(const uint8* src, int src_stride,
                                uint8* dst, int dst_stride, int width) {
-__asm {
+  __asm {
     push      edi
     push      esi
     push      ebp
@@ -79,9 +72,11 @@ __asm {
     mov       edx, [esp + 12 + 12]  // dst
     mov       esi, [esp + 12 + 16]  // dst_stride
     mov       ecx, [esp + 12 + 20]  // width
- convertloop :
+
     // Read in the data from the source pointer.
     // First round of bit swap.
+    align      16
+ convertloop:
     movq      xmm0, qword ptr [eax]
     lea       ebp, [eax + 8]
     movq      xmm1, qword ptr [eax + edi]
@@ -144,10 +139,10 @@ __asm {
     movq      qword ptr [edx], xmm3
     movdqa    xmm7, xmm3
     palignr   xmm7, xmm7, 8
+    sub       ecx, 8
     movq      qword ptr [edx + esi], xmm7
     lea       edx, [edx + 2 * esi]
-    sub       ecx, 8
-    ja        convertloop
+    jg        convertloop
 
     pop       ebp
     pop       esi
@@ -157,12 +152,12 @@ __asm {
 }
 
 #define HAS_TRANSPOSE_UVWX8_SSE2
-__declspec(naked)
+__declspec(naked) __declspec(align(16))
 static void TransposeUVWx8_SSE2(const uint8* src, int src_stride,
                                 uint8* dst_a, int dst_stride_a,
                                 uint8* dst_b, int dst_stride_b,
                                 int w) {
-__asm {
+  __asm {
     push      ebx
     push      esi
     push      edi
@@ -178,7 +173,9 @@ __asm {
     and       esp, ~15
     mov       [esp + 16], ecx
     mov       ecx, [ecx + 16 + 28]  // w
- convertloop :
+
+    align      16
+ convertloop:
     // Read in the data from the source pointer.
     // First round of bit swap.
     movdqa    xmm0, [eax]
@@ -268,12 +265,12 @@ __asm {
     movlpd    qword ptr [edx], xmm3
     movhpd    qword ptr [ebx], xmm3
     punpckhdq xmm0, xmm7
+    sub       ecx, 8
     movlpd    qword ptr [edx + esi], xmm0
     lea       edx, [edx + 2 * esi]
     movhpd    qword ptr [ebx + ebp], xmm0
     lea       ebx, [ebx + 2 * ebp]
-    sub       ecx, 8
-    ja        convertloop
+    jg        convertloop
 
     mov       esp, [esp + 16]
     pop       ebp
@@ -283,356 +280,355 @@ __asm {
     ret
   }
 }
-#elif (defined(__i386__) || defined(__x86_64__)) && \
-    !defined(COVERAGE_ENABLED) && !defined(TARGET_IPHONE_SIMULATOR)
+#elif !defined(YUV_DISABLE_ASM) && (defined(__i386__) || defined(__x86_64__))
 #define HAS_TRANSPOSE_WX8_SSSE3
 static void TransposeWx8_SSSE3(const uint8* src, int src_stride,
                                uint8* dst, int dst_stride, int width) {
-  asm volatile(
-"1:"
-  // Read in the data from the source pointer.
-  // First round of bit swap.
-  "movq       (%0),%%xmm0\n"
-  "movq       (%0,%3),%%xmm1\n"
-  "lea        (%0,%3,2),%0\n"
-  "punpcklbw  %%xmm1,%%xmm0\n"
-  "movq       (%0),%%xmm2\n"
-  "movdqa     %%xmm0,%%xmm1\n"
-  "palignr    $0x8,%%xmm1,%%xmm1\n"
-  "movq       (%0,%3),%%xmm3\n"
-  "lea        (%0,%3,2),%0\n"
-  "punpcklbw  %%xmm3,%%xmm2\n"
-  "movdqa     %%xmm2,%%xmm3\n"
-  "movq       (%0),%%xmm4\n"
-  "palignr    $0x8,%%xmm3,%%xmm3\n"
-  "movq       (%0,%3),%%xmm5\n"
-  "lea        (%0,%3,2),%0\n"
-  "punpcklbw  %%xmm5,%%xmm4\n"
-  "movdqa     %%xmm4,%%xmm5\n"
-  "movq       (%0),%%xmm6\n"
-  "palignr    $0x8,%%xmm5,%%xmm5\n"
-  "movq       (%0,%3),%%xmm7\n"
-  "lea        (%0,%3,2),%0\n"
-  "punpcklbw  %%xmm7,%%xmm6\n"
-  "neg        %3\n"
-  "movdqa     %%xmm6,%%xmm7\n"
-  "lea        0x8(%0,%3,8),%0\n"
-  "palignr    $0x8,%%xmm7,%%xmm7\n"
-  "neg        %3\n"
-   // Second round of bit swap.
-  "punpcklwd  %%xmm2,%%xmm0\n"
-  "punpcklwd  %%xmm3,%%xmm1\n"
-  "movdqa     %%xmm0,%%xmm2\n"
-  "movdqa     %%xmm1,%%xmm3\n"
-  "palignr    $0x8,%%xmm2,%%xmm2\n"
-  "palignr    $0x8,%%xmm3,%%xmm3\n"
-  "punpcklwd  %%xmm6,%%xmm4\n"
-  "punpcklwd  %%xmm7,%%xmm5\n"
-  "movdqa     %%xmm4,%%xmm6\n"
-  "movdqa     %%xmm5,%%xmm7\n"
-  "palignr    $0x8,%%xmm6,%%xmm6\n"
-  "palignr    $0x8,%%xmm7,%%xmm7\n"
-  // Third round of bit swap.
-  // Write to the destination pointer.
-  "punpckldq  %%xmm4,%%xmm0\n"
-  "movq       %%xmm0,(%1)\n"
-  "movdqa     %%xmm0,%%xmm4\n"
-  "palignr    $0x8,%%xmm4,%%xmm4\n"
-  "movq       %%xmm4,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "punpckldq  %%xmm6,%%xmm2\n"
-  "movdqa     %%xmm2,%%xmm6\n"
-  "movq       %%xmm2,(%1)\n"
-  "palignr    $0x8,%%xmm6,%%xmm6\n"
-  "punpckldq  %%xmm5,%%xmm1\n"
-  "movq       %%xmm6,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "movdqa     %%xmm1,%%xmm5\n"
-  "movq       %%xmm1,(%1)\n"
-  "palignr    $0x8,%%xmm5,%%xmm5\n"
-  "movq       %%xmm5,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "punpckldq  %%xmm7,%%xmm3\n"
-  "movq       %%xmm3,(%1)\n"
-  "movdqa     %%xmm3,%%xmm7\n"
-  "palignr    $0x8,%%xmm7,%%xmm7\n"
-  "movq       %%xmm7,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "sub        $0x8,%2\n"
-  "ja         1b\n"
-  : "+r"(src),    // %0
-    "+r"(dst),    // %1
-    "+r"(width)   // %2
-  : "r"(static_cast<intptr_t>(src_stride)),  // %3
-    "r"(static_cast<intptr_t>(dst_stride))   // %4
-  : "memory"
-);
+  asm volatile (
+    // Read in the data from the source pointer.
+    // First round of bit swap.
+    ".p2align  4                                 \n"
+  "1:                                            \n"
+    "movq       (%0),%%xmm0                      \n"
+    "movq       (%0,%3),%%xmm1                   \n"
+    "lea        (%0,%3,2),%0                     \n"
+    "punpcklbw  %%xmm1,%%xmm0                    \n"
+    "movq       (%0),%%xmm2                      \n"
+    "movdqa     %%xmm0,%%xmm1                    \n"
+    "palignr    $0x8,%%xmm1,%%xmm1               \n"
+    "movq       (%0,%3),%%xmm3                   \n"
+    "lea        (%0,%3,2),%0                     \n"
+    "punpcklbw  %%xmm3,%%xmm2                    \n"
+    "movdqa     %%xmm2,%%xmm3                    \n"
+    "movq       (%0),%%xmm4                      \n"
+    "palignr    $0x8,%%xmm3,%%xmm3               \n"
+    "movq       (%0,%3),%%xmm5                   \n"
+    "lea        (%0,%3,2),%0                     \n"
+    "punpcklbw  %%xmm5,%%xmm4                    \n"
+    "movdqa     %%xmm4,%%xmm5                    \n"
+    "movq       (%0),%%xmm6                      \n"
+    "palignr    $0x8,%%xmm5,%%xmm5               \n"
+    "movq       (%0,%3),%%xmm7                   \n"
+    "lea        (%0,%3,2),%0                     \n"
+    "punpcklbw  %%xmm7,%%xmm6                    \n"
+    "neg        %3                               \n"
+    "movdqa     %%xmm6,%%xmm7                    \n"
+    "lea        0x8(%0,%3,8),%0                  \n"
+    "palignr    $0x8,%%xmm7,%%xmm7               \n"
+    "neg        %3                               \n"
+     // Second round of bit swap.
+    "punpcklwd  %%xmm2,%%xmm0                    \n"
+    "punpcklwd  %%xmm3,%%xmm1                    \n"
+    "movdqa     %%xmm0,%%xmm2                    \n"
+    "movdqa     %%xmm1,%%xmm3                    \n"
+    "palignr    $0x8,%%xmm2,%%xmm2               \n"
+    "palignr    $0x8,%%xmm3,%%xmm3               \n"
+    "punpcklwd  %%xmm6,%%xmm4                    \n"
+    "punpcklwd  %%xmm7,%%xmm5                    \n"
+    "movdqa     %%xmm4,%%xmm6                    \n"
+    "movdqa     %%xmm5,%%xmm7                    \n"
+    "palignr    $0x8,%%xmm6,%%xmm6               \n"
+    "palignr    $0x8,%%xmm7,%%xmm7               \n"
+    // Third round of bit swap.
+    // Write to the destination pointer.
+    "punpckldq  %%xmm4,%%xmm0                    \n"
+    "movq       %%xmm0,(%1)                      \n"
+    "movdqa     %%xmm0,%%xmm4                    \n"
+    "palignr    $0x8,%%xmm4,%%xmm4               \n"
+    "movq       %%xmm4,(%1,%4)                   \n"
+    "lea        (%1,%4,2),%1                     \n"
+    "punpckldq  %%xmm6,%%xmm2                    \n"
+    "movdqa     %%xmm2,%%xmm6                    \n"
+    "movq       %%xmm2,(%1)                      \n"
+    "palignr    $0x8,%%xmm6,%%xmm6               \n"
+    "punpckldq  %%xmm5,%%xmm1                    \n"
+    "movq       %%xmm6,(%1,%4)                   \n"
+    "lea        (%1,%4,2),%1                     \n"
+    "movdqa     %%xmm1,%%xmm5                    \n"
+    "movq       %%xmm1,(%1)                      \n"
+    "palignr    $0x8,%%xmm5,%%xmm5               \n"
+    "movq       %%xmm5,(%1,%4)                   \n"
+    "lea        (%1,%4,2),%1                     \n"
+    "punpckldq  %%xmm7,%%xmm3                    \n"
+    "movq       %%xmm3,(%1)                      \n"
+    "movdqa     %%xmm3,%%xmm7                    \n"
+    "palignr    $0x8,%%xmm7,%%xmm7               \n"
+    "sub        $0x8,%2                          \n"
+    "movq       %%xmm7,(%1,%4)                   \n"
+    "lea        (%1,%4,2),%1                     \n"
+    "jg         1b                               \n"
+    : "+r"(src),    // %0
+      "+r"(dst),    // %1
+      "+r"(width)   // %2
+    : "r"(static_cast<intptr_t>(src_stride)),  // %3
+      "r"(static_cast<intptr_t>(dst_stride))   // %4
+    : "memory", "cc"
+  #if defined(__SSE2__)
+      , "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"
+  #endif
+  );
 }
 
-#if defined (__i386__)
+#if !defined(YUV_DISABLE_ASM) && defined (__i386__)
 #define HAS_TRANSPOSE_UVWX8_SSE2
 extern "C" void TransposeUVWx8_SSE2(const uint8* src, int src_stride,
                                     uint8* dst_a, int dst_stride_a,
                                     uint8* dst_b, int dst_stride_b,
                                     int w);
-  asm(
-    ".text\n"
-#if defined(OSX)
-    ".globl _TransposeUVWx8_SSE2\n"
-"_TransposeUVWx8_SSE2:\n"
-#else
-    ".global TransposeUVWx8_SSE2\n"
-"TransposeUVWx8_SSE2:\n"
-#endif
-    "push   %ebx\n"
-    "push   %esi\n"
-    "push   %edi\n"
-    "push   %ebp\n"
-    "mov    0x14(%esp),%eax\n"
-    "mov    0x18(%esp),%edi\n"
-    "mov    0x1c(%esp),%edx\n"
-    "mov    0x20(%esp),%esi\n"
-    "mov    0x24(%esp),%ebx\n"
-    "mov    0x28(%esp),%ebp\n"
-    "mov    %esp,%ecx\n"
-    "sub    $0x14,%esp\n"
-    "and    $0xfffffff0,%esp\n"
-    "mov    %ecx,0x10(%esp)\n"
-    "mov    0x2c(%ecx),%ecx\n"
+  asm (
+    DECLARE_FUNCTION(TransposeUVWx8_SSE2)
+    "push   %ebx                               \n"
+    "push   %esi                               \n"
+    "push   %edi                               \n"
+    "push   %ebp                               \n"
+    "mov    0x14(%esp),%eax                    \n"
+    "mov    0x18(%esp),%edi                    \n"
+    "mov    0x1c(%esp),%edx                    \n"
+    "mov    0x20(%esp),%esi                    \n"
+    "mov    0x24(%esp),%ebx                    \n"
+    "mov    0x28(%esp),%ebp                    \n"
+    "mov    %esp,%ecx                          \n"
+    "sub    $0x14,%esp                         \n"
+    "and    $0xfffffff0,%esp                   \n"
+    "mov    %ecx,0x10(%esp)                    \n"
+    "mov    0x2c(%ecx),%ecx                    \n"
 
-"1:"
-    "movdqa (%eax),%xmm0\n"
-    "movdqa (%eax,%edi,1),%xmm1\n"
-    "lea    (%eax,%edi,2),%eax\n"
-    "movdqa %xmm0,%xmm7\n"
-    "punpcklbw %xmm1,%xmm0\n"
-    "punpckhbw %xmm1,%xmm7\n"
-    "movdqa %xmm7,%xmm1\n"
-    "movdqa (%eax),%xmm2\n"
-    "movdqa (%eax,%edi,1),%xmm3\n"
-    "lea    (%eax,%edi,2),%eax\n"
-    "movdqa %xmm2,%xmm7\n"
-    "punpcklbw %xmm3,%xmm2\n"
-    "punpckhbw %xmm3,%xmm7\n"
-    "movdqa %xmm7,%xmm3\n"
-    "movdqa (%eax),%xmm4\n"
-    "movdqa (%eax,%edi,1),%xmm5\n"
-    "lea    (%eax,%edi,2),%eax\n"
-    "movdqa %xmm4,%xmm7\n"
-    "punpcklbw %xmm5,%xmm4\n"
-    "punpckhbw %xmm5,%xmm7\n"
-    "movdqa %xmm7,%xmm5\n"
-    "movdqa (%eax),%xmm6\n"
-    "movdqa (%eax,%edi,1),%xmm7\n"
-    "lea    (%eax,%edi,2),%eax\n"
-    "movdqa %xmm5,(%esp)\n"
-    "neg    %edi\n"
-    "movdqa %xmm6,%xmm5\n"
-    "punpcklbw %xmm7,%xmm6\n"
-    "punpckhbw %xmm7,%xmm5\n"
-    "movdqa %xmm5,%xmm7\n"
-    "lea    0x10(%eax,%edi,8),%eax\n"
-    "neg    %edi\n"
-    "movdqa %xmm0,%xmm5\n"
-    "punpcklwd %xmm2,%xmm0\n"
-    "punpckhwd %xmm2,%xmm5\n"
-    "movdqa %xmm5,%xmm2\n"
-    "movdqa %xmm1,%xmm5\n"
-    "punpcklwd %xmm3,%xmm1\n"
-    "punpckhwd %xmm3,%xmm5\n"
-    "movdqa %xmm5,%xmm3\n"
-    "movdqa %xmm4,%xmm5\n"
-    "punpcklwd %xmm6,%xmm4\n"
-    "punpckhwd %xmm6,%xmm5\n"
-    "movdqa %xmm5,%xmm6\n"
-    "movdqa (%esp),%xmm5\n"
-    "movdqa %xmm6,(%esp)\n"
-    "movdqa %xmm5,%xmm6\n"
-    "punpcklwd %xmm7,%xmm5\n"
-    "punpckhwd %xmm7,%xmm6\n"
-    "movdqa %xmm6,%xmm7\n"
-    "movdqa %xmm0,%xmm6\n"
-    "punpckldq %xmm4,%xmm0\n"
-    "punpckhdq %xmm4,%xmm6\n"
-    "movdqa %xmm6,%xmm4\n"
-    "movdqa (%esp),%xmm6\n"
-    "movlpd %xmm0,(%edx)\n"
-    "movhpd %xmm0,(%ebx)\n"
-    "movlpd %xmm4,(%edx,%esi,1)\n"
-    "lea    (%edx,%esi,2),%edx\n"
-    "movhpd %xmm4,(%ebx,%ebp,1)\n"
-    "lea    (%ebx,%ebp,2),%ebx\n"
-    "movdqa %xmm2,%xmm0\n"
-    "punpckldq %xmm6,%xmm2\n"
-    "movlpd %xmm2,(%edx)\n"
-    "movhpd %xmm2,(%ebx)\n"
-    "punpckhdq %xmm6,%xmm0\n"
-    "movlpd %xmm0,(%edx,%esi,1)\n"
-    "lea    (%edx,%esi,2),%edx\n"
-    "movhpd %xmm0,(%ebx,%ebp,1)\n"
-    "lea    (%ebx,%ebp,2),%ebx\n"
-    "movdqa %xmm1,%xmm0\n"
-    "punpckldq %xmm5,%xmm1\n"
-    "movlpd %xmm1,(%edx)\n"
-    "movhpd %xmm1,(%ebx)\n"
-    "punpckhdq %xmm5,%xmm0\n"
-    "movlpd %xmm0,(%edx,%esi,1)\n"
-    "lea    (%edx,%esi,2),%edx\n"
-    "movhpd %xmm0,(%ebx,%ebp,1)\n"
-    "lea    (%ebx,%ebp,2),%ebx\n"
-    "movdqa %xmm3,%xmm0\n"
-    "punpckldq %xmm7,%xmm3\n"
-    "movlpd %xmm3,(%edx)\n"
-    "movhpd %xmm3,(%ebx)\n"
-    "punpckhdq %xmm7,%xmm0\n"
-    "movlpd %xmm0,(%edx,%esi,1)\n"
-    "lea    (%edx,%esi,2),%edx\n"
-    "movhpd %xmm0,(%ebx,%ebp,1)\n"
-    "lea    (%ebx,%ebp,2),%ebx\n"
-    "sub    $0x8,%ecx\n"
-    "ja     1b\n"
-    "mov    0x10(%esp),%esp\n"
-    "pop    %ebp\n"
-    "pop    %edi\n"
-    "pop    %esi\n"
-    "pop    %ebx\n"
-    "ret\n"
+"1:                                            \n"
+    "movdqa (%eax),%xmm0                       \n"
+    "movdqa (%eax,%edi,1),%xmm1                \n"
+    "lea    (%eax,%edi,2),%eax                 \n"
+    "movdqa %xmm0,%xmm7                        \n"
+    "punpcklbw %xmm1,%xmm0                     \n"
+    "punpckhbw %xmm1,%xmm7                     \n"
+    "movdqa %xmm7,%xmm1                        \n"
+    "movdqa (%eax),%xmm2                       \n"
+    "movdqa (%eax,%edi,1),%xmm3                \n"
+    "lea    (%eax,%edi,2),%eax                 \n"
+    "movdqa %xmm2,%xmm7                        \n"
+    "punpcklbw %xmm3,%xmm2                     \n"
+    "punpckhbw %xmm3,%xmm7                     \n"
+    "movdqa %xmm7,%xmm3                        \n"
+    "movdqa (%eax),%xmm4                       \n"
+    "movdqa (%eax,%edi,1),%xmm5                \n"
+    "lea    (%eax,%edi,2),%eax                 \n"
+    "movdqa %xmm4,%xmm7                        \n"
+    "punpcklbw %xmm5,%xmm4                     \n"
+    "punpckhbw %xmm5,%xmm7                     \n"
+    "movdqa %xmm7,%xmm5                        \n"
+    "movdqa (%eax),%xmm6                       \n"
+    "movdqa (%eax,%edi,1),%xmm7                \n"
+    "lea    (%eax,%edi,2),%eax                 \n"
+    "movdqa %xmm5,(%esp)                       \n"
+    "neg    %edi                               \n"
+    "movdqa %xmm6,%xmm5                        \n"
+    "punpcklbw %xmm7,%xmm6                     \n"
+    "punpckhbw %xmm7,%xmm5                     \n"
+    "movdqa %xmm5,%xmm7                        \n"
+    "lea    0x10(%eax,%edi,8),%eax             \n"
+    "neg    %edi                               \n"
+    "movdqa %xmm0,%xmm5                        \n"
+    "punpcklwd %xmm2,%xmm0                     \n"
+    "punpckhwd %xmm2,%xmm5                     \n"
+    "movdqa %xmm5,%xmm2                        \n"
+    "movdqa %xmm1,%xmm5                        \n"
+    "punpcklwd %xmm3,%xmm1                     \n"
+    "punpckhwd %xmm3,%xmm5                     \n"
+    "movdqa %xmm5,%xmm3                        \n"
+    "movdqa %xmm4,%xmm5                        \n"
+    "punpcklwd %xmm6,%xmm4                     \n"
+    "punpckhwd %xmm6,%xmm5                     \n"
+    "movdqa %xmm5,%xmm6                        \n"
+    "movdqa (%esp),%xmm5                       \n"
+    "movdqa %xmm6,(%esp)                       \n"
+    "movdqa %xmm5,%xmm6                        \n"
+    "punpcklwd %xmm7,%xmm5                     \n"
+    "punpckhwd %xmm7,%xmm6                     \n"
+    "movdqa %xmm6,%xmm7                        \n"
+    "movdqa %xmm0,%xmm6                        \n"
+    "punpckldq %xmm4,%xmm0                     \n"
+    "punpckhdq %xmm4,%xmm6                     \n"
+    "movdqa %xmm6,%xmm4                        \n"
+    "movdqa (%esp),%xmm6                       \n"
+    "movlpd %xmm0,(%edx)                       \n"
+    "movhpd %xmm0,(%ebx)                       \n"
+    "movlpd %xmm4,(%edx,%esi,1)                \n"
+    "lea    (%edx,%esi,2),%edx                 \n"
+    "movhpd %xmm4,(%ebx,%ebp,1)                \n"
+    "lea    (%ebx,%ebp,2),%ebx                 \n"
+    "movdqa %xmm2,%xmm0                        \n"
+    "punpckldq %xmm6,%xmm2                     \n"
+    "movlpd %xmm2,(%edx)                       \n"
+    "movhpd %xmm2,(%ebx)                       \n"
+    "punpckhdq %xmm6,%xmm0                     \n"
+    "movlpd %xmm0,(%edx,%esi,1)                \n"
+    "lea    (%edx,%esi,2),%edx                 \n"
+    "movhpd %xmm0,(%ebx,%ebp,1)                \n"
+    "lea    (%ebx,%ebp,2),%ebx                 \n"
+    "movdqa %xmm1,%xmm0                        \n"
+    "punpckldq %xmm5,%xmm1                     \n"
+    "movlpd %xmm1,(%edx)                       \n"
+    "movhpd %xmm1,(%ebx)                       \n"
+    "punpckhdq %xmm5,%xmm0                     \n"
+    "movlpd %xmm0,(%edx,%esi,1)                \n"
+    "lea    (%edx,%esi,2),%edx                 \n"
+    "movhpd %xmm0,(%ebx,%ebp,1)                \n"
+    "lea    (%ebx,%ebp,2),%ebx                 \n"
+    "movdqa %xmm3,%xmm0                        \n"
+    "punpckldq %xmm7,%xmm3                     \n"
+    "movlpd %xmm3,(%edx)                       \n"
+    "movhpd %xmm3,(%ebx)                       \n"
+    "punpckhdq %xmm7,%xmm0                     \n"
+    "sub    $0x8,%ecx                          \n"
+    "movlpd %xmm0,(%edx,%esi,1)                \n"
+    "lea    (%edx,%esi,2),%edx                 \n"
+    "movhpd %xmm0,(%ebx,%ebp,1)                \n"
+    "lea    (%ebx,%ebp,2),%ebx                 \n"
+    "jg     1b                                 \n"
+    "mov    0x10(%esp),%esp                    \n"
+    "pop    %ebp                               \n"
+    "pop    %edi                               \n"
+    "pop    %esi                               \n"
+    "pop    %ebx                               \n"
+    "ret                                       \n"
 );
-#elif defined (__x86_64__)
+#elif !defined(YUV_DISABLE_ASM) && defined(__x86_64__)
 // 64 bit version has enough registers to do 16x8 to 8x16 at a time.
 #define HAS_TRANSPOSE_WX8_FAST_SSSE3
 static void TransposeWx8_FAST_SSSE3(const uint8* src, int src_stride,
                                     uint8* dst, int dst_stride, int width) {
-  asm volatile(
-"1:"
+  asm volatile (
   // Read in the data from the source pointer.
   // First round of bit swap.
-  "movdqa     (%0),%%xmm0\n"
-  "movdqa     (%0,%3),%%xmm1\n"
-  "lea        (%0,%3,2),%0\n"
-  "movdqa     %%xmm0,%%xmm8\n"
-  "punpcklbw  %%xmm1,%%xmm0\n"
-  "punpckhbw  %%xmm1,%%xmm8\n"
-  "movdqa     (%0),%%xmm2\n"
-  "movdqa     %%xmm0,%%xmm1\n"
-  "movdqa     %%xmm8,%%xmm9\n"
-  "palignr    $0x8,%%xmm1,%%xmm1\n"
-  "palignr    $0x8,%%xmm9,%%xmm9\n"
-  "movdqa     (%0,%3),%%xmm3\n"
-  "lea        (%0,%3,2),%0\n"
-  "movdqa     %%xmm2,%%xmm10\n"
-  "punpcklbw  %%xmm3,%%xmm2\n"
-  "punpckhbw  %%xmm3,%%xmm10\n"
-  "movdqa     %%xmm2,%%xmm3\n"
-  "movdqa     %%xmm10,%%xmm11\n"
-  "movdqa     (%0),%%xmm4\n"
-  "palignr    $0x8,%%xmm3,%%xmm3\n"
-  "palignr    $0x8,%%xmm11,%%xmm11\n"
-  "movdqa     (%0,%3),%%xmm5\n"
-  "lea        (%0,%3,2),%0\n"
-  "movdqa     %%xmm4,%%xmm12\n"
-  "punpcklbw  %%xmm5,%%xmm4\n"
-  "punpckhbw  %%xmm5,%%xmm12\n"
-  "movdqa     %%xmm4,%%xmm5\n"
-  "movdqa     %%xmm12,%%xmm13\n"
-  "movdqa     (%0),%%xmm6\n"
-  "palignr    $0x8,%%xmm5,%%xmm5\n"
-  "palignr    $0x8,%%xmm13,%%xmm13\n"
-  "movdqa     (%0,%3),%%xmm7\n"
-  "lea        (%0,%3,2),%0\n"
-  "movdqa     %%xmm6,%%xmm14\n"
-  "punpcklbw  %%xmm7,%%xmm6\n"
-  "punpckhbw  %%xmm7,%%xmm14\n"
-  "neg        %3\n"
-  "movdqa     %%xmm6,%%xmm7\n"
-  "movdqa     %%xmm14,%%xmm15\n"
-  "lea        0x10(%0,%3,8),%0\n"
-  "palignr    $0x8,%%xmm7,%%xmm7\n"
-  "palignr    $0x8,%%xmm15,%%xmm15\n"
-  "neg        %3\n"
+  ".p2align  4                                 \n"
+"1:                                            \n"
+  "movdqa     (%0),%%xmm0                      \n"
+  "movdqa     (%0,%3),%%xmm1                   \n"
+  "lea        (%0,%3,2),%0                     \n"
+  "movdqa     %%xmm0,%%xmm8                    \n"
+  "punpcklbw  %%xmm1,%%xmm0                    \n"
+  "punpckhbw  %%xmm1,%%xmm8                    \n"
+  "movdqa     (%0),%%xmm2                      \n"
+  "movdqa     %%xmm0,%%xmm1                    \n"
+  "movdqa     %%xmm8,%%xmm9                    \n"
+  "palignr    $0x8,%%xmm1,%%xmm1               \n"
+  "palignr    $0x8,%%xmm9,%%xmm9               \n"
+  "movdqa     (%0,%3),%%xmm3                   \n"
+  "lea        (%0,%3,2),%0                     \n"
+  "movdqa     %%xmm2,%%xmm10                   \n"
+  "punpcklbw  %%xmm3,%%xmm2                    \n"
+  "punpckhbw  %%xmm3,%%xmm10                   \n"
+  "movdqa     %%xmm2,%%xmm3                    \n"
+  "movdqa     %%xmm10,%%xmm11                  \n"
+  "movdqa     (%0),%%xmm4                      \n"
+  "palignr    $0x8,%%xmm3,%%xmm3               \n"
+  "palignr    $0x8,%%xmm11,%%xmm11             \n"
+  "movdqa     (%0,%3),%%xmm5                   \n"
+  "lea        (%0,%3,2),%0                     \n"
+  "movdqa     %%xmm4,%%xmm12                   \n"
+  "punpcklbw  %%xmm5,%%xmm4                    \n"
+  "punpckhbw  %%xmm5,%%xmm12                   \n"
+  "movdqa     %%xmm4,%%xmm5                    \n"
+  "movdqa     %%xmm12,%%xmm13                  \n"
+  "movdqa     (%0),%%xmm6                      \n"
+  "palignr    $0x8,%%xmm5,%%xmm5               \n"
+  "palignr    $0x8,%%xmm13,%%xmm13             \n"
+  "movdqa     (%0,%3),%%xmm7                   \n"
+  "lea        (%0,%3,2),%0                     \n"
+  "movdqa     %%xmm6,%%xmm14                   \n"
+  "punpcklbw  %%xmm7,%%xmm6                    \n"
+  "punpckhbw  %%xmm7,%%xmm14                   \n"
+  "neg        %3                               \n"
+  "movdqa     %%xmm6,%%xmm7                    \n"
+  "movdqa     %%xmm14,%%xmm15                  \n"
+  "lea        0x10(%0,%3,8),%0                 \n"
+  "palignr    $0x8,%%xmm7,%%xmm7               \n"
+  "palignr    $0x8,%%xmm15,%%xmm15             \n"
+  "neg        %3                               \n"
    // Second round of bit swap.
-  "punpcklwd  %%xmm2,%%xmm0\n"
-  "punpcklwd  %%xmm3,%%xmm1\n"
-  "movdqa     %%xmm0,%%xmm2\n"
-  "movdqa     %%xmm1,%%xmm3\n"
-  "palignr    $0x8,%%xmm2,%%xmm2\n"
-  "palignr    $0x8,%%xmm3,%%xmm3\n"
-  "punpcklwd  %%xmm6,%%xmm4\n"
-  "punpcklwd  %%xmm7,%%xmm5\n"
-  "movdqa     %%xmm4,%%xmm6\n"
-  "movdqa     %%xmm5,%%xmm7\n"
-  "palignr    $0x8,%%xmm6,%%xmm6\n"
-  "palignr    $0x8,%%xmm7,%%xmm7\n"
-  "punpcklwd  %%xmm10,%%xmm8\n"
-  "punpcklwd  %%xmm11,%%xmm9\n"
-  "movdqa     %%xmm8,%%xmm10\n"
-  "movdqa     %%xmm9,%%xmm11\n"
-  "palignr    $0x8,%%xmm10,%%xmm10\n"
-  "palignr    $0x8,%%xmm11,%%xmm11\n"
-  "punpcklwd  %%xmm14,%%xmm12\n"
-  "punpcklwd  %%xmm15,%%xmm13\n"
-  "movdqa     %%xmm12,%%xmm14\n"
-  "movdqa     %%xmm13,%%xmm15\n"
-  "palignr    $0x8,%%xmm14,%%xmm14\n"
-  "palignr    $0x8,%%xmm15,%%xmm15\n"
+  "punpcklwd  %%xmm2,%%xmm0                    \n"
+  "punpcklwd  %%xmm3,%%xmm1                    \n"
+  "movdqa     %%xmm0,%%xmm2                    \n"
+  "movdqa     %%xmm1,%%xmm3                    \n"
+  "palignr    $0x8,%%xmm2,%%xmm2               \n"
+  "palignr    $0x8,%%xmm3,%%xmm3               \n"
+  "punpcklwd  %%xmm6,%%xmm4                    \n"
+  "punpcklwd  %%xmm7,%%xmm5                    \n"
+  "movdqa     %%xmm4,%%xmm6                    \n"
+  "movdqa     %%xmm5,%%xmm7                    \n"
+  "palignr    $0x8,%%xmm6,%%xmm6               \n"
+  "palignr    $0x8,%%xmm7,%%xmm7               \n"
+  "punpcklwd  %%xmm10,%%xmm8                   \n"
+  "punpcklwd  %%xmm11,%%xmm9                   \n"
+  "movdqa     %%xmm8,%%xmm10                   \n"
+  "movdqa     %%xmm9,%%xmm11                   \n"
+  "palignr    $0x8,%%xmm10,%%xmm10             \n"
+  "palignr    $0x8,%%xmm11,%%xmm11             \n"
+  "punpcklwd  %%xmm14,%%xmm12                  \n"
+  "punpcklwd  %%xmm15,%%xmm13                  \n"
+  "movdqa     %%xmm12,%%xmm14                  \n"
+  "movdqa     %%xmm13,%%xmm15                  \n"
+  "palignr    $0x8,%%xmm14,%%xmm14             \n"
+  "palignr    $0x8,%%xmm15,%%xmm15             \n"
   // Third round of bit swap.
   // Write to the destination pointer.
-  "punpckldq  %%xmm4,%%xmm0\n"
-  "movq       %%xmm0,(%1)\n"
-  "movdqa     %%xmm0,%%xmm4\n"
-  "palignr    $0x8,%%xmm4,%%xmm4\n"
-  "movq       %%xmm4,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "punpckldq  %%xmm6,%%xmm2\n"
-  "movdqa     %%xmm2,%%xmm6\n"
-  "movq       %%xmm2,(%1)\n"
-  "palignr    $0x8,%%xmm6,%%xmm6\n"
-  "punpckldq  %%xmm5,%%xmm1\n"
-  "movq       %%xmm6,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "movdqa     %%xmm1,%%xmm5\n"
-  "movq       %%xmm1,(%1)\n"
-  "palignr    $0x8,%%xmm5,%%xmm5\n"
-  "movq       %%xmm5,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "punpckldq  %%xmm7,%%xmm3\n"
-  "movq       %%xmm3,(%1)\n"
-  "movdqa     %%xmm3,%%xmm7\n"
-  "palignr    $0x8,%%xmm7,%%xmm7\n"
-  "movq       %%xmm7,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "punpckldq  %%xmm12,%%xmm8\n"
-  "movq       %%xmm8,(%1)\n"
-  "movdqa     %%xmm8,%%xmm12\n"
-  "palignr    $0x8,%%xmm12,%%xmm12\n"
-  "movq       %%xmm12,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "punpckldq  %%xmm14,%%xmm10\n"
-  "movdqa     %%xmm10,%%xmm14\n"
-  "movq       %%xmm10,(%1)\n"
-  "palignr    $0x8,%%xmm14,%%xmm14\n"
-  "punpckldq  %%xmm13,%%xmm9\n"
-  "movq       %%xmm14,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "movdqa     %%xmm9,%%xmm13\n"
-  "movq       %%xmm9,(%1)\n"
-  "palignr    $0x8,%%xmm13,%%xmm13\n"
-  "movq       %%xmm13,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "punpckldq  %%xmm15,%%xmm11\n"
-  "movq       %%xmm11,(%1)\n"
-  "movdqa     %%xmm11,%%xmm15\n"
-  "palignr    $0x8,%%xmm15,%%xmm15\n"
-  "movq       %%xmm15,(%1,%4)\n"
-  "lea        (%1,%4,2),%1\n"
-  "sub        $0x10,%2\n"
-  "ja         1b\n"
+  "punpckldq  %%xmm4,%%xmm0                    \n"
+  "movq       %%xmm0,(%1)                      \n"
+  "movdqa     %%xmm0,%%xmm4                    \n"
+  "palignr    $0x8,%%xmm4,%%xmm4               \n"
+  "movq       %%xmm4,(%1,%4)                   \n"
+  "lea        (%1,%4,2),%1                     \n"
+  "punpckldq  %%xmm6,%%xmm2                    \n"
+  "movdqa     %%xmm2,%%xmm6                    \n"
+  "movq       %%xmm2,(%1)                      \n"
+  "palignr    $0x8,%%xmm6,%%xmm6               \n"
+  "punpckldq  %%xmm5,%%xmm1                    \n"
+  "movq       %%xmm6,(%1,%4)                   \n"
+  "lea        (%1,%4,2),%1                     \n"
+  "movdqa     %%xmm1,%%xmm5                    \n"
+  "movq       %%xmm1,(%1)                      \n"
+  "palignr    $0x8,%%xmm5,%%xmm5               \n"
+  "movq       %%xmm5,(%1,%4)                   \n"
+  "lea        (%1,%4,2),%1                     \n"
+  "punpckldq  %%xmm7,%%xmm3                    \n"
+  "movq       %%xmm3,(%1)                      \n"
+  "movdqa     %%xmm3,%%xmm7                    \n"
+  "palignr    $0x8,%%xmm7,%%xmm7               \n"
+  "movq       %%xmm7,(%1,%4)                   \n"
+  "lea        (%1,%4,2),%1                     \n"
+  "punpckldq  %%xmm12,%%xmm8                   \n"
+  "movq       %%xmm8,(%1)                      \n"
+  "movdqa     %%xmm8,%%xmm12                   \n"
+  "palignr    $0x8,%%xmm12,%%xmm12             \n"
+  "movq       %%xmm12,(%1,%4)                  \n"
+  "lea        (%1,%4,2),%1                     \n"
+  "punpckldq  %%xmm14,%%xmm10                  \n"
+  "movdqa     %%xmm10,%%xmm14                  \n"
+  "movq       %%xmm10,(%1)                     \n"
+  "palignr    $0x8,%%xmm14,%%xmm14             \n"
+  "punpckldq  %%xmm13,%%xmm9                   \n"
+  "movq       %%xmm14,(%1,%4)                  \n"
+  "lea        (%1,%4,2),%1                     \n"
+  "movdqa     %%xmm9,%%xmm13                   \n"
+  "movq       %%xmm9,(%1)                      \n"
+  "palignr    $0x8,%%xmm13,%%xmm13             \n"
+  "movq       %%xmm13,(%1,%4)                  \n"
+  "lea        (%1,%4,2),%1                     \n"
+  "punpckldq  %%xmm15,%%xmm11                  \n"
+  "movq       %%xmm11,(%1)                     \n"
+  "movdqa     %%xmm11,%%xmm15                  \n"
+  "palignr    $0x8,%%xmm15,%%xmm15             \n"
+  "sub        $0x10,%2                         \n"
+  "movq       %%xmm15,(%1,%4)                  \n"
+  "lea        (%1,%4,2),%1                     \n"
+  "jg         1b                               \n"
   : "+r"(src),    // %0
     "+r"(dst),    // %1
     "+r"(width)   // %2
   : "r"(static_cast<intptr_t>(src_stride)),  // %3
     "r"(static_cast<intptr_t>(dst_stride))   // %4
-  : "memory"
+  : "memory", "cc",
+    "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+    "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13",  "xmm14",  "xmm15"
 );
 }
 
@@ -641,98 +637,99 @@ static void TransposeUVWx8_SSE2(const uint8* src, int src_stride,
                                 uint8* dst_a, int dst_stride_a,
                                 uint8* dst_b, int dst_stride_b,
                                 int w) {
-  asm volatile(
-"1:"
+  asm volatile (
   // Read in the data from the source pointer.
   // First round of bit swap.
-  "movdqa     (%0),%%xmm0\n"
-  "movdqa     (%0,%4),%%xmm1\n"
-  "lea        (%0,%4,2),%0\n"
-  "movdqa     %%xmm0,%%xmm8\n"
-  "punpcklbw  %%xmm1,%%xmm0\n"
-  "punpckhbw  %%xmm1,%%xmm8\n"
-  "movdqa     %%xmm8,%%xmm1\n"
-  "movdqa     (%0),%%xmm2\n"
-  "movdqa     (%0,%4),%%xmm3\n"
-  "lea        (%0,%4,2),%0\n"
-  "movdqa     %%xmm2,%%xmm8\n"
-  "punpcklbw  %%xmm3,%%xmm2\n"
-  "punpckhbw  %%xmm3,%%xmm8\n"
-  "movdqa     %%xmm8,%%xmm3\n"
-  "movdqa     (%0),%%xmm4\n"
-  "movdqa     (%0,%4),%%xmm5\n"
-  "lea        (%0,%4,2),%0\n"
-  "movdqa     %%xmm4,%%xmm8\n"
-  "punpcklbw  %%xmm5,%%xmm4\n"
-  "punpckhbw  %%xmm5,%%xmm8\n"
-  "movdqa     %%xmm8,%%xmm5\n"
-  "movdqa     (%0),%%xmm6\n"
-  "movdqa     (%0,%4),%%xmm7\n"
-  "lea        (%0,%4,2),%0\n"
-  "movdqa     %%xmm6,%%xmm8\n"
-  "punpcklbw  %%xmm7,%%xmm6\n"
-  "neg        %4\n"
-  "lea        0x10(%0,%4,8),%0\n"
-  "punpckhbw  %%xmm7,%%xmm8\n"
-  "movdqa     %%xmm8,%%xmm7\n"
-  "neg        %4\n"
+  ".p2align  4                                 \n"
+"1:                                            \n"
+  "movdqa     (%0),%%xmm0                      \n"
+  "movdqa     (%0,%4),%%xmm1                   \n"
+  "lea        (%0,%4,2),%0                     \n"
+  "movdqa     %%xmm0,%%xmm8                    \n"
+  "punpcklbw  %%xmm1,%%xmm0                    \n"
+  "punpckhbw  %%xmm1,%%xmm8                    \n"
+  "movdqa     %%xmm8,%%xmm1                    \n"
+  "movdqa     (%0),%%xmm2                      \n"
+  "movdqa     (%0,%4),%%xmm3                   \n"
+  "lea        (%0,%4,2),%0                     \n"
+  "movdqa     %%xmm2,%%xmm8                    \n"
+  "punpcklbw  %%xmm3,%%xmm2                    \n"
+  "punpckhbw  %%xmm3,%%xmm8                    \n"
+  "movdqa     %%xmm8,%%xmm3                    \n"
+  "movdqa     (%0),%%xmm4                      \n"
+  "movdqa     (%0,%4),%%xmm5                   \n"
+  "lea        (%0,%4,2),%0                     \n"
+  "movdqa     %%xmm4,%%xmm8                    \n"
+  "punpcklbw  %%xmm5,%%xmm4                    \n"
+  "punpckhbw  %%xmm5,%%xmm8                    \n"
+  "movdqa     %%xmm8,%%xmm5                    \n"
+  "movdqa     (%0),%%xmm6                      \n"
+  "movdqa     (%0,%4),%%xmm7                   \n"
+  "lea        (%0,%4,2),%0                     \n"
+  "movdqa     %%xmm6,%%xmm8                    \n"
+  "punpcklbw  %%xmm7,%%xmm6                    \n"
+  "neg        %4                               \n"
+  "lea        0x10(%0,%4,8),%0                 \n"
+  "punpckhbw  %%xmm7,%%xmm8                    \n"
+  "movdqa     %%xmm8,%%xmm7                    \n"
+  "neg        %4                               \n"
    // Second round of bit swap.
-  "movdqa     %%xmm0,%%xmm8\n"
-  "movdqa     %%xmm1,%%xmm9\n"
-  "punpckhwd  %%xmm2,%%xmm8\n"
-  "punpckhwd  %%xmm3,%%xmm9\n"
-  "punpcklwd  %%xmm2,%%xmm0\n"
-  "punpcklwd  %%xmm3,%%xmm1\n"
-  "movdqa     %%xmm8,%%xmm2\n"
-  "movdqa     %%xmm9,%%xmm3\n"
-  "movdqa     %%xmm4,%%xmm8\n"
-  "movdqa     %%xmm5,%%xmm9\n"
-  "punpckhwd  %%xmm6,%%xmm8\n"
-  "punpckhwd  %%xmm7,%%xmm9\n"
-  "punpcklwd  %%xmm6,%%xmm4\n"
-  "punpcklwd  %%xmm7,%%xmm5\n"
-  "movdqa     %%xmm8,%%xmm6\n"
-  "movdqa     %%xmm9,%%xmm7\n"
+  "movdqa     %%xmm0,%%xmm8                    \n"
+  "movdqa     %%xmm1,%%xmm9                    \n"
+  "punpckhwd  %%xmm2,%%xmm8                    \n"
+  "punpckhwd  %%xmm3,%%xmm9                    \n"
+  "punpcklwd  %%xmm2,%%xmm0                    \n"
+  "punpcklwd  %%xmm3,%%xmm1                    \n"
+  "movdqa     %%xmm8,%%xmm2                    \n"
+  "movdqa     %%xmm9,%%xmm3                    \n"
+  "movdqa     %%xmm4,%%xmm8                    \n"
+  "movdqa     %%xmm5,%%xmm9                    \n"
+  "punpckhwd  %%xmm6,%%xmm8                    \n"
+  "punpckhwd  %%xmm7,%%xmm9                    \n"
+  "punpcklwd  %%xmm6,%%xmm4                    \n"
+  "punpcklwd  %%xmm7,%%xmm5                    \n"
+  "movdqa     %%xmm8,%%xmm6                    \n"
+  "movdqa     %%xmm9,%%xmm7                    \n"
   // Third round of bit swap.
   // Write to the destination pointer.
-  "movdqa     %%xmm0,%%xmm8\n"
-  "punpckldq  %%xmm4,%%xmm0\n"
-  "movlpd     %%xmm0,(%1)\n"  // Write back U channel
-  "movhpd     %%xmm0,(%2)\n"  // Write back V channel
-  "punpckhdq  %%xmm4,%%xmm8\n"
-  "movlpd     %%xmm8,(%1,%5)\n"
-  "lea        (%1,%5,2),%1\n"
-  "movhpd     %%xmm8,(%2,%6)\n"
-  "lea        (%2,%6,2),%2\n"
-  "movdqa     %%xmm2,%%xmm8\n"
-  "punpckldq  %%xmm6,%%xmm2\n"
-  "movlpd     %%xmm2,(%1)\n"
-  "movhpd     %%xmm2,(%2)\n"
-  "punpckhdq  %%xmm6,%%xmm8\n"
-  "movlpd     %%xmm8,(%1,%5)\n"
-  "lea        (%1,%5,2),%1\n"
-  "movhpd     %%xmm8,(%2,%6)\n"
-  "lea        (%2,%6,2),%2\n"
-  "movdqa     %%xmm1,%%xmm8\n"
-  "punpckldq  %%xmm5,%%xmm1\n"
-  "movlpd     %%xmm1,(%1)\n"
-  "movhpd     %%xmm1,(%2)\n"
-  "punpckhdq  %%xmm5,%%xmm8\n"
-  "movlpd     %%xmm8,(%1,%5)\n"
-  "lea        (%1,%5,2),%1\n"
-  "movhpd     %%xmm8,(%2,%6)\n"
-  "lea        (%2,%6,2),%2\n"
-  "movdqa     %%xmm3,%%xmm8\n"
-  "punpckldq  %%xmm7,%%xmm3\n"
-  "movlpd     %%xmm3,(%1)\n"
-  "movhpd     %%xmm3,(%2)\n"
-  "punpckhdq  %%xmm7,%%xmm8\n"
-  "movlpd     %%xmm8,(%1,%5)\n"
-  "lea        (%1,%5,2),%1\n"
-  "movhpd     %%xmm8,(%2,%6)\n"
-  "lea        (%2,%6,2),%2\n"
-  "sub        $0x8,%3\n"
-  "ja         1b\n"
+  "movdqa     %%xmm0,%%xmm8                    \n"
+  "punpckldq  %%xmm4,%%xmm0                    \n"
+  "movlpd     %%xmm0,(%1)                      \n"  // Write back U channel
+  "movhpd     %%xmm0,(%2)                      \n"  // Write back V channel
+  "punpckhdq  %%xmm4,%%xmm8                    \n"
+  "movlpd     %%xmm8,(%1,%5)                   \n"
+  "lea        (%1,%5,2),%1                     \n"
+  "movhpd     %%xmm8,(%2,%6)                   \n"
+  "lea        (%2,%6,2),%2                     \n"
+  "movdqa     %%xmm2,%%xmm8                    \n"
+  "punpckldq  %%xmm6,%%xmm2                    \n"
+  "movlpd     %%xmm2,(%1)                      \n"
+  "movhpd     %%xmm2,(%2)                      \n"
+  "punpckhdq  %%xmm6,%%xmm8                    \n"
+  "movlpd     %%xmm8,(%1,%5)                   \n"
+  "lea        (%1,%5,2),%1                     \n"
+  "movhpd     %%xmm8,(%2,%6)                   \n"
+  "lea        (%2,%6,2),%2                     \n"
+  "movdqa     %%xmm1,%%xmm8                    \n"
+  "punpckldq  %%xmm5,%%xmm1                    \n"
+  "movlpd     %%xmm1,(%1)                      \n"
+  "movhpd     %%xmm1,(%2)                      \n"
+  "punpckhdq  %%xmm5,%%xmm8                    \n"
+  "movlpd     %%xmm8,(%1,%5)                   \n"
+  "lea        (%1,%5,2),%1                     \n"
+  "movhpd     %%xmm8,(%2,%6)                   \n"
+  "lea        (%2,%6,2),%2                     \n"
+  "movdqa     %%xmm3,%%xmm8                    \n"
+  "punpckldq  %%xmm7,%%xmm3                    \n"
+  "movlpd     %%xmm3,(%1)                      \n"
+  "movhpd     %%xmm3,(%2)                      \n"
+  "punpckhdq  %%xmm7,%%xmm8                    \n"
+  "sub        $0x8,%3                          \n"
+  "movlpd     %%xmm8,(%1,%5)                   \n"
+  "lea        (%1,%5,2),%1                     \n"
+  "movhpd     %%xmm8,(%2,%6)                   \n"
+  "lea        (%2,%6,2),%2                     \n"
+  "jg         1b                               \n"
   : "+r"(src),    // %0
     "+r"(dst_a),  // %1
     "+r"(dst_b),  // %2
@@ -740,7 +737,9 @@ static void TransposeUVWx8_SSE2(const uint8* src, int src_stride,
   : "r"(static_cast<intptr_t>(src_stride)),    // %4
     "r"(static_cast<intptr_t>(dst_stride_a)),  // %5
     "r"(static_cast<intptr_t>(dst_stride_b))   // %6
-  : "memory"
+  : "memory", "cc",
+    "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+    "xmm8", "xmm9"
 );
 }
 #endif
@@ -748,9 +747,8 @@ static void TransposeUVWx8_SSE2(const uint8* src, int src_stride,
 
 static void TransposeWx8_C(const uint8* src, int src_stride,
                            uint8* dst, int dst_stride,
-                           int w) {
-  int i;
-  for (i = 0; i < w; ++i) {
+                           int width) {
+  for (int i = 0; i < width; ++i) {
     dst[0] = src[0 * src_stride];
     dst[1] = src[1 * src_stride];
     dst[2] = src[2 * src_stride];
@@ -767,184 +765,143 @@ static void TransposeWx8_C(const uint8* src, int src_stride,
 static void TransposeWxH_C(const uint8* src, int src_stride,
                            uint8* dst, int dst_stride,
                            int width, int height) {
-  int i, j;
-  for (i = 0; i < width; ++i)
-    for (j = 0; j < height; ++j)
+  for (int i = 0; i < width; ++i) {
+    for (int j = 0; j < height; ++j) {
       dst[i * dst_stride + j] = src[j * src_stride + i];
+    }
+  }
 }
 
+LIBYUV_API
 void TransposePlane(const uint8* src, int src_stride,
                     uint8* dst, int dst_stride,
                     int width, int height) {
-  int i = height;
-  rotate_wx8_func TransposeWx8;
-  rotate_wxh_func TransposeWxH;
-
+  void (*TransposeWx8)(const uint8* src, int src_stride,
+                       uint8* dst, int dst_stride,
+                       int width) = TransposeWx8_C;
 #if defined(HAS_TRANSPOSE_WX8_NEON)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasNEON) &&
-      (width % 8 == 0) &&
-      IS_ALIGNED(src, 8) && (src_stride % 8 == 0) &&
-      IS_ALIGNED(dst, 8) && (dst_stride % 8 == 0)) {
+  if (TestCpuFlag(kCpuHasNEON)) {
     TransposeWx8 = TransposeWx8_NEON;
-    TransposeWxH = TransposeWxH_C;
-  } else
-#endif
-#if defined(HAS_TRANSPOSE_WX8_FAST_SSSE3)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasSSSE3) &&
-      (width % 16 == 0) &&
-      IS_ALIGNED(src, 16) && (src_stride % 16 == 0) &&
-      IS_ALIGNED(dst, 8) && (dst_stride % 8 == 0)) {
-    TransposeWx8 = TransposeWx8_FAST_SSSE3;
-    TransposeWxH = TransposeWxH_C;
-  } else
+  }
 #endif
 #if defined(HAS_TRANSPOSE_WX8_SSSE3)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasSSSE3) &&
-      (width % 8 == 0) &&
-      IS_ALIGNED(src, 8) && (src_stride % 8 == 0) &&
-      IS_ALIGNED(dst, 8) && (dst_stride % 8 == 0)) {
+  if (TestCpuFlag(kCpuHasSSSE3) && IS_ALIGNED(width, 8)) {
     TransposeWx8 = TransposeWx8_SSSE3;
-    TransposeWxH = TransposeWxH_C;
-  } else
-#endif
-  {
-    TransposeWx8 = TransposeWx8_C;
-    TransposeWxH = TransposeWxH_C;
   }
+#endif
+#if defined(HAS_TRANSPOSE_WX8_FAST_SSSE3)
+  if (TestCpuFlag(kCpuHasSSSE3) &&
+      IS_ALIGNED(width, 16) &&
+      IS_ALIGNED(src, 16) && IS_ALIGNED(src_stride, 16)) {
+    TransposeWx8 = TransposeWx8_FAST_SSSE3;
+  }
+#endif
 
-  // work across the source in 8x8 tiles
+  // Work across the source in 8x8 tiles
+  int i = height;
   while (i >= 8) {
     TransposeWx8(src, src_stride, dst, dst_stride, width);
-
-    src += 8 * src_stride;    // go down 8 rows
-    dst += 8;                 // move over 8 columns
-    i   -= 8;
+    src += 8 * src_stride;    // Go down 8 rows.
+    dst += 8;                 // Move over 8 columns.
+    i -= 8;
   }
 
-  TransposeWxH(src, src_stride, dst, dst_stride, width, i);
+  TransposeWxH_C(src, src_stride, dst, dst_stride, width, i);
 }
 
+LIBYUV_API
 void RotatePlane90(const uint8* src, int src_stride,
                    uint8* dst, int dst_stride,
                    int width, int height) {
   // Rotate by 90 is a transpose with the source read
-  // from bottom to top.  So set the source pointer to the end
+  // from bottom to top. So set the source pointer to the end
   // of the buffer and flip the sign of the source stride.
   src += src_stride * (height - 1);
   src_stride = -src_stride;
-
   TransposePlane(src, src_stride, dst, dst_stride, width, height);
 }
 
+LIBYUV_API
 void RotatePlane270(const uint8* src, int src_stride,
                     uint8* dst, int dst_stride,
                     int width, int height) {
   // Rotate by 270 is a transpose with the destination written
-  // from bottom to top.  So set the destination pointer to the end
+  // from bottom to top. So set the destination pointer to the end
   // of the buffer and flip the sign of the destination stride.
   dst += dst_stride * (width - 1);
   dst_stride = -dst_stride;
-
   TransposePlane(src, src_stride, dst, dst_stride, width, height);
 }
 
-static void ReverseLine_C(const uint8* src, uint8* dst, int width) {
-  int i;
-  src += width - 1;
-  for (i = 0; i < width; ++i) {
-    dst[i] = src[0];
-    --src;
-  }
-}
-
-#if defined(WIN32) && !defined(COVERAGE_ENABLED)
-#define HAS_REVERSE_LINE_SSSE3
-__declspec(naked)
-static void ReverseLine_SSSE3(const uint8* src, uint8* dst, int width) {
-__asm {
-    mov       eax, [esp + 4]   // src
-    mov       edx, [esp + 8]   // dst
-    mov       ecx, [esp + 12]  // width
-    movdqa    xmm7, _kShuffleReverse
-    lea       eax, [eax + ecx - 16]
- convertloop :
-    movdqa    xmm0, [eax]
-    lea       eax, [eax - 16]
-    pshufb    xmm0, xmm7
-    movdqa    [edx], xmm0
-    lea       edx, [edx + 16]
-    sub       ecx, 16
-    ja        convertloop
-    ret
-  }
-}
-
-#elif (defined(__i386__) || defined(__x86_64__)) && \
-    !defined(COVERAGE_ENABLED) && !defined(TARGET_IPHONE_SIMULATOR)
-#define HAS_REVERSE_LINE_SSSE3
-static void ReverseLine_SSSE3(const uint8* src, uint8* dst, int width) {
-  intptr_t temp_width = static_cast<intptr_t>(width);
-  asm volatile(
-  "movdqa     (%3),%%xmm7\n"
-  "lea        -0x10(%0,%2,1),%0\n"
-"1:"
-  "movdqa     (%0),%%xmm0\n"
-  "lea        -0x10(%0),%0\n"
-  "pshufb     %%xmm7,%%xmm0\n"
-  "movdqa     %%xmm0,(%1)\n"
-  "lea        0x10(%1),%1\n"
-  "sub        $0x10,%2\n"
-  "ja         1b\n"
-  : "+r"(src),    // %0
-    "+r"(dst),    // %1
-    "+r"(temp_width)   // %2
-  : "r"(kShuffleReverse)   // %3
-  : "memory"
-);
-}
-#endif
-
+LIBYUV_API
 void RotatePlane180(const uint8* src, int src_stride,
                     uint8* dst, int dst_stride,
                     int width, int height) {
-  int i;
-  reverse_func ReverseLine;
-
-#if defined(HAS_REVERSE_LINE_NEON)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasNEON) &&
-      (width % 16 == 0) &&
-      IS_ALIGNED(src, 16) && (src_stride % 16 == 0) &&
-      IS_ALIGNED(dst, 16) && (dst_stride % 16 == 0)) {
-    ReverseLine = ReverseLine_NEON;
-  } else
-#endif
-#if defined(HAS_REVERSE_LINE_SSSE3)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasSSSE3) &&
-      (width % 16 == 0) &&
-      IS_ALIGNED(src, 16) && (src_stride % 16 == 0) &&
-      IS_ALIGNED(dst, 16) && (dst_stride % 16 == 0)) {
-    ReverseLine = ReverseLine_SSSE3;
-  } else
-#endif
-  {
-    ReverseLine = ReverseLine_C;
+  void (*MirrorRow)(const uint8* src, uint8* dst, int width) = MirrorRow_C;
+#if defined(HAS_MIRRORROW_NEON)
+  if (TestCpuFlag(kCpuHasNEON)) {
+    MirrorRow = MirrorRow_NEON;
   }
-  // Rotate by 180 is a mirror and vertical flip
-  src += src_stride * (height - 1);
-
-  for (i = 0; i < height; ++i) {
-    ReverseLine(src, dst, width);
-    src -= src_stride;
+#endif
+#if defined(HAS_MIRRORROW_SSE2)
+  if (TestCpuFlag(kCpuHasSSE2) &&
+      IS_ALIGNED(width, 16) &&
+      IS_ALIGNED(src, 16) && IS_ALIGNED(src_stride, 16) &&
+      IS_ALIGNED(dst, 16) && IS_ALIGNED(dst_stride, 16)) {
+    MirrorRow = MirrorRow_SSE2;
+  }
+#endif
+#if defined(HAS_MIRRORROW_SSSE3)
+  if (TestCpuFlag(kCpuHasSSSE3) &&
+      IS_ALIGNED(width, 16) &&
+      IS_ALIGNED(src, 16) && IS_ALIGNED(src_stride, 16) &&
+      IS_ALIGNED(dst, 16) && IS_ALIGNED(dst_stride, 16)) {
+    MirrorRow = MirrorRow_SSSE3;
+  }
+#endif
+  void (*CopyRow)(const uint8* src, uint8* dst, int width) = CopyRow_C;
+#if defined(HAS_COPYROW_NEON)
+  if (TestCpuFlag(kCpuHasNEON) && IS_ALIGNED(width, 64)) {
+    CopyRow = CopyRow_NEON;
+  }
+#endif
+#if defined(HAS_COPYROW_X86)
+  if (TestCpuFlag(kCpuHasX86) && IS_ALIGNED(width, 4)) {
+    CopyRow = CopyRow_X86;
+  }
+#endif
+#if defined(HAS_COPYROW_SSE2)
+  if (TestCpuFlag(kCpuHasSSE2) && IS_ALIGNED(width, 32) &&
+      IS_ALIGNED(src, 16) && IS_ALIGNED(src_stride, 16) &&
+      IS_ALIGNED(dst, 16) && IS_ALIGNED(dst_stride, 16)) {
+    CopyRow = CopyRow_SSE2;
+  }
+#endif
+  if (width > kMaxStride) {
+    return;
+  }
+  // Swap first and last row and mirror the content. Uses a temporary row.
+  SIMD_ALIGNED(uint8 row[kMaxStride]);
+  const uint8* src_bot = src + src_stride * (height - 1);
+  uint8* dst_bot = dst + dst_stride * (height - 1);
+  int half_height = (height + 1) >> 1;
+  // Odd height will harmlessly mirror the middle row twice.
+  for (int y = 0; y < half_height; ++y) {
+    MirrorRow(src, row, width);  // Mirror first row into a buffer
+    src += src_stride;
+    MirrorRow(src_bot, dst, width);  // Mirror last row into first row
     dst += dst_stride;
+    CopyRow(row, dst_bot, width);  // Copy first mirrored row into last
+    src_bot -= src_stride;
+    dst_bot -= dst_stride;
   }
 }
 
 static void TransposeUVWx8_C(const uint8* src, int src_stride,
                              uint8* dst_a, int dst_stride_a,
                              uint8* dst_b, int dst_stride_b,
-                             int w) {
-  int i;
-  for (i = 0; i < w; ++i) {
+                             int width) {
+  for (int i = 0; i < width; ++i) {
     dst_a[0] = src[0 * src_stride + 0];
     dst_b[0] = src[0 * src_stride + 1];
     dst_a[1] = src[1 * src_stride + 0];
@@ -970,71 +927,55 @@ static void TransposeUVWx8_C(const uint8* src, int src_stride,
 static void TransposeUVWxH_C(const uint8* src, int src_stride,
                              uint8* dst_a, int dst_stride_a,
                              uint8* dst_b, int dst_stride_b,
-                             int w, int h) {
-  int i, j;
-  for (i = 0; i < w * 2; i += 2)
-    for (j = 0; j < h; ++j) {
+                             int width, int height) {
+  for (int i = 0; i < width * 2; i += 2)
+    for (int j = 0; j < height; ++j) {
       dst_a[j + ((i >> 1) * dst_stride_a)] = src[i + (j * src_stride)];
       dst_b[j + ((i >> 1) * dst_stride_b)] = src[i + (j * src_stride) + 1];
     }
 }
 
+LIBYUV_API
 void TransposeUV(const uint8* src, int src_stride,
                  uint8* dst_a, int dst_stride_a,
                  uint8* dst_b, int dst_stride_b,
                  int width, int height) {
+  void (*TransposeUVWx8)(const uint8* src, int src_stride,
+                         uint8* dst_a, int dst_stride_a,
+                         uint8* dst_b, int dst_stride_b,
+                         int width) = TransposeUVWx8_C;
+#if defined(HAS_TRANSPOSE_UVWX8_NEON)
+  if (TestCpuFlag(kCpuHasNEON)) {
+    TransposeUVWx8 = TransposeUVWx8_NEON;
+  }
+#elif defined(HAS_TRANSPOSE_UVWX8_SSE2)
+  if (TestCpuFlag(kCpuHasSSE2) &&
+      IS_ALIGNED(width, 8) &&
+      IS_ALIGNED(src, 16) && IS_ALIGNED(src_stride, 16)) {
+    TransposeUVWx8 = TransposeUVWx8_SSE2;
+  }
+#endif
+
+  // Work through the source in 8x8 tiles.
   int i = height;
-  rotate_uv_wx8_func TransposeWx8;
-  rotate_uv_wxh_func TransposeWxH;
-
-#if defined(HAS_TRANSPOSE_UVWX8_NEON)
-  unsigned long long store_reg[8];
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasNEON)) {
-    SaveRegisters_NEON(store_reg);
-    TransposeWx8 = TransposeUVWx8_NEON;
-    TransposeWxH = TransposeUVWxH_C;
-  } else
-#endif
-#if defined(HAS_TRANSPOSE_UVWX8_SSE2)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasSSE2) &&
-      (width % 8 == 0) &&
-      IS_ALIGNED(src, 16) && (src_stride % 16 == 0) &&
-      IS_ALIGNED(dst_a, 8) && (dst_stride_a % 8 == 0) &&
-      IS_ALIGNED(dst_b, 8) && (dst_stride_b % 8 == 0)) {
-    TransposeWx8 = TransposeUVWx8_SSE2;
-    TransposeWxH = TransposeUVWxH_C;
-  } else
-#endif
-  {
-    TransposeWx8 = TransposeUVWx8_C;
-    TransposeWxH = TransposeUVWxH_C;
-  }
-
-  // work through the source in 8x8 tiles
   while (i >= 8) {
-    TransposeWx8(src, src_stride,
-                 dst_a, dst_stride_a,
-                 dst_b, dst_stride_b,
-                 width);
-
-    src   += 8 * src_stride;    // go down 8 rows
-    dst_a += 8;                 // move over 8 columns
-    dst_b += 8;                 // move over 8 columns
-    i     -= 8;
+    TransposeUVWx8(src, src_stride,
+                   dst_a, dst_stride_a,
+                   dst_b, dst_stride_b,
+                   width);
+    src += 8 * src_stride;    // Go down 8 rows.
+    dst_a += 8;               // Move over 8 columns.
+    dst_b += 8;               // Move over 8 columns.
+    i -= 8;
   }
 
-  TransposeWxH(src, src_stride,
-               dst_a, dst_stride_a,
-               dst_b, dst_stride_b,
-               width, i);
-
-#if defined(HAS_TRANSPOSE_UVWX8_NEON)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasNEON)) {
-    RestoreRegisters_NEON(store_reg);
-  }
-#endif
+  TransposeUVWxH_C(src, src_stride,
+                   dst_a, dst_stride_a,
+                   dst_b, dst_stride_b,
+                   width, i);
 }
 
+LIBYUV_API
 void RotateUV90(const uint8* src, int src_stride,
                 uint8* dst_a, int dst_stride_a,
                 uint8* dst_b, int dst_stride_b,
@@ -1048,6 +989,7 @@ void RotateUV90(const uint8* src, int src_stride,
               width, height);
 }
 
+LIBYUV_API
 void RotateUV270(const uint8* src, int src_stride,
                  uint8* dst_a, int dst_stride_a,
                  uint8* dst_b, int dst_stride_b,
@@ -1063,119 +1005,38 @@ void RotateUV270(const uint8* src, int src_stride,
               width, height);
 }
 
-#if defined(WIN32) && !defined(COVERAGE_ENABLED)
-#define HAS_REVERSE_LINE_UV_SSSE3
-__declspec(naked)
-void ReverseLineUV_SSSE3(const uint8* src,
-                         uint8* dst_a, uint8* dst_b,
-                         int width) {
-__asm {
-    push      edi
-    mov       eax, [esp + 4 + 4]   // src
-    mov       edx, [esp + 4 + 8]   // dst_a
-    mov       edi, [esp + 4 + 12]  // dst_b
-    mov       ecx, [esp + 4 + 16]  // width
-    movdqa    xmm7, _kShuffleReverseUV
-    lea       eax, [eax + ecx * 2 - 16]
-
- convertloop :
-    movdqa    xmm0, [eax]
-    lea       eax, [eax - 16]
-    pshufb    xmm0, xmm7
-    movlpd    qword ptr [edx], xmm0
-    lea       edx, [edx + 8]
-    movhpd    qword ptr [edi], xmm0
-    lea       edi, [edi + 8]
-    sub       ecx, 8
-    ja        convertloop
-    pop       edi
-    ret
-  }
-}
-
-#elif (defined(__i386__) || defined(__x86_64__)) && \
-    !defined(COVERAGE_ENABLED) && !defined(TARGET_IPHONE_SIMULATOR)
-#define HAS_REVERSE_LINE_UV_SSSE3
-void ReverseLineUV_SSSE3(const uint8* src,
-                         uint8* dst_a, uint8* dst_b,
-                         int width) {
-  intptr_t temp_width = static_cast<intptr_t>(width);
-  asm volatile(
-  "movdqa     (%4),%%xmm7\n"
-  "lea        -0x10(%0,%3,2),%0\n"
-"1:"
-  "movdqa     (%0),%%xmm0\n"
-  "lea        -0x10(%0),%0\n"
-  "pshufb     %%xmm7,%%xmm0\n"
-  "movlpd     %%xmm0,(%1)\n"
-  "lea        0x8(%1),%1\n"
-  "movhpd     %%xmm0,(%2)\n"
-  "lea        0x8(%2),%2\n"
-  "sub        $0x8,%3\n"
-  "ja         1b\n"
-  : "+r"(src),      // %0
-    "+r"(dst_a),    // %1
-    "+r"(dst_b),    // %2
-    "+r"(temp_width)     // %3
-  : "r"(kShuffleReverseUV)  // %4
-  : "memory"
-);
-}
-#endif
-
-static void ReverseLineUV_C(const uint8* src,
-                            uint8* dst_a, uint8* dst_b,
-                            int width) {
-  int i;
-  src += width << 1;
-  for (i = 0; i < width; ++i) {
-    src -= 2;
-    dst_a[i] = src[0];
-    dst_b[i] = src[1];
-  }
-}
-
+// Rotate 180 is a horizontal and vertical flip.
+LIBYUV_API
 void RotateUV180(const uint8* src, int src_stride,
                  uint8* dst_a, int dst_stride_a,
                  uint8* dst_b, int dst_stride_b,
                  int width, int height) {
-  int i;
-  reverse_uv_func ReverseLine;
-
-#if defined(HAS_REVERSE_LINE_UV_NEON)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasNEON) &&
-      (width % 16 == 0) &&
-      IS_ALIGNED(src, 16) && (src_stride % 16 == 0) &&
-      IS_ALIGNED(dst_a, 8) && (dst_stride_a % 8 == 0) &&
-      IS_ALIGNED(dst_b, 8) && (dst_stride_b % 8 == 0) ) {
-    ReverseLine = ReverseLineUV_NEON;
-  } else
-#endif
-#if defined(HAS_REVERSE_LINE_UV_SSSE3)
-  if (libyuv::TestCpuFlag(libyuv::kCpuHasSSSE3) &&
-      (width % 16 == 0) &&
-      IS_ALIGNED(src, 16) && (src_stride % 16 == 0) &&
-      IS_ALIGNED(dst_a, 8) && (dst_stride_a % 8 == 0) &&
-      IS_ALIGNED(dst_b, 8) && (dst_stride_b % 8 == 0) ) {
-    ReverseLine = ReverseLineUV_SSSE3;
-  } else
-#endif
-  {
-    ReverseLine = ReverseLineUV_C;
+  void (*MirrorRowUV)(const uint8* src, uint8* dst_u, uint8* dst_v, int width) =
+      MirrorRowUV_C;
+#if defined(HAS_MIRRORROW_UV_NEON)
+  if (TestCpuFlag(kCpuHasNEON)) {
+    MirrorRowUV = MirrorRowUV_NEON;
   }
+#elif defined(HAS_MIRRORROW_UV_SSSE3)
+  if (TestCpuFlag(kCpuHasSSSE3) &&
+      IS_ALIGNED(width, 16) &&
+      IS_ALIGNED(src, 16) && IS_ALIGNED(src_stride, 16)) {
+    MirrorRowUV = MirrorRowUV_SSSE3;
+  }
+#endif
 
   dst_a += dst_stride_a * (height - 1);
   dst_b += dst_stride_b * (height - 1);
 
-  for (i = 0; i < height; ++i) {
-    ReverseLine(src, dst_a, dst_b, width);
-
-    src   += src_stride;      // down one line at a time
-    dst_a -= dst_stride_a;    // nominally up one line at a time
-    dst_b -= dst_stride_b;    // nominally up one line at a time
+  for (int i = 0; i < height; ++i) {
+    MirrorRowUV(src, dst_a, dst_b, width);
+    src += src_stride;
+    dst_a -= dst_stride_a;
+    dst_b -= dst_stride_b;
   }
 }
 
+LIBYUV_API
 int I420Rotate(const uint8* src_y, int src_stride_y,
                const uint8* src_u, int src_stride_u,
                const uint8* src_v, int src_stride_v,
@@ -1184,6 +1045,10 @@ int I420Rotate(const uint8* src_y, int src_stride_y,
                uint8* dst_v, int dst_stride_v,
                int width, int height,
                RotationMode mode) {
+  if (!src_y || !src_u || !src_v || width <= 0 || height == 0 ||
+      !dst_y || !dst_u || !dst_v) {
+    return -1;
+  }
   int halfwidth = (width + 1) >> 1;
   int halfheight = (height + 1) >> 1;
 
@@ -1248,6 +1113,7 @@ int I420Rotate(const uint8* src_y, int src_stride_y,
   return -1;
 }
 
+LIBYUV_API
 int NV12ToI420Rotate(const uint8* src_y, int src_stride_y,
                      const uint8* src_uv, int src_stride_uv,
                      uint8* dst_y, int dst_stride_y,
@@ -1255,6 +1121,10 @@ int NV12ToI420Rotate(const uint8* src_y, int src_stride_y,
                      uint8* dst_v, int dst_stride_v,
                      int width, int height,
                      RotationMode mode) {
+  if (!src_y || !src_uv || width <= 0 || height == 0 ||
+      !dst_y || !dst_u || !dst_v) {
+    return -1;
+  }
   int halfwidth = (width + 1) >> 1;
   int halfheight = (height + 1) >> 1;
 
@@ -1271,7 +1141,8 @@ int NV12ToI420Rotate(const uint8* src_y, int src_stride_y,
   switch (mode) {
     case kRotate0:
       // copy frame
-      return NV12ToI420(src_y, src_uv, src_stride_y,
+      return NV12ToI420(src_y, src_stride_y,
+                        src_uv, src_stride_uv,
                         dst_y, dst_stride_y,
                         dst_u, dst_stride_u,
                         dst_v, dst_stride_v,
@@ -1309,4 +1180,7 @@ int NV12ToI420Rotate(const uint8* src_y, int src_stride_y,
   return -1;
 }
 
+#ifdef __cplusplus
+}  // extern "C"
 }  // namespace libyuv
+#endif
