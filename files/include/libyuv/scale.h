@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2011 The LibYuv project authors. All Rights Reserved.
+ *  Copyright 2011 The LibYuv Project Authors. All rights reserved.
  *
  *  Use of this source code is governed by a BSD-style license
  *  that can be found in the LICENSE file in the root of the source
@@ -8,19 +8,30 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#ifndef INCLUDE_LIBYUV_SCALE_H_
+#ifndef INCLUDE_LIBYUV_SCALE_H_  // NOLINT
 #define INCLUDE_LIBYUV_SCALE_H_
 
 #include "libyuv/basic_types.h"
 
+#ifdef __cplusplus
 namespace libyuv {
+extern "C" {
+#endif
 
 // Supported filtering
 enum FilterMode {
-  kFilterNone = 0,  // Point sample; Fastest
+  kFilterNone = 0,  // Point sample; Fastest.
   kFilterBilinear = 1,  // Faster than box, but lower quality scaling down.
-  kFilterBox = 2  // Highest quality
+  kFilterBox = 2  // Highest quality.
 };
+
+// Scale a YUV plane.
+LIBYUV_API
+void ScalePlane(const uint8* src, int src_stride,
+                int src_width, int src_height,
+                uint8* dst, int dst_stride,
+                int dst_width, int dst_height,
+                FilterMode filtering);
 
 // Scales a YUV 4:2:0 image from the src width and height to the
 // dst width and height.
@@ -32,6 +43,7 @@ enum FilterMode {
 // quality image, at further expense of speed.
 // Returns 0 if successful.
 
+LIBYUV_API
 int I420Scale(const uint8* src_y, int src_stride_y,
               const uint8* src_u, int src_stride_u,
               const uint8* src_v, int src_stride_v,
@@ -42,15 +54,8 @@ int I420Scale(const uint8* src_y, int src_stride_y,
               int dst_width, int dst_height,
               FilterMode filtering);
 
-// Legacy API
-// If dst_height_offset is non-zero, the image is offset by that many pixels
-// and stretched to (dst_height - dst_height_offset * 2) pixels high,
-// instead of dst_height.
-int Scale(const uint8* src, int src_width, int src_height,
-          uint8* dst, int dst_width, int dst_height, int dst_height_offset,
-          bool interpolate);
-
-// Same, but specified src terms of each plane location and stride.
+// Legacy API.  Deprecated.
+LIBYUV_API
 int Scale(const uint8* src_y, const uint8* src_u, const uint8* src_v,
           int src_stride_y, int src_stride_u, int src_stride_v,
           int src_width, int src_height,
@@ -59,9 +64,19 @@ int Scale(const uint8* src_y, const uint8* src_u, const uint8* src_v,
           int dst_width, int dst_height,
           bool interpolate);
 
-// For testing, allow disabling of optimizations.
+// Legacy API.  Deprecated.
+LIBYUV_API
+int ScaleOffset(const uint8* src, int src_width, int src_height,
+                uint8* dst, int dst_width, int dst_height, int dst_yoffset,
+                bool interpolate);
+
+// For testing, allow disabling of specialized scalers.
+LIBYUV_API
 void SetUseReferenceImpl(bool use);
 
-} // namespace libyuv
+#ifdef __cplusplus
+}  // extern "C"
+}  // namespace libyuv
+#endif
 
-#endif // INCLUDE_LIBYUV_SCALE_H_
+#endif  // INCLUDE_LIBYUV_SCALE_H_  NOLINT
