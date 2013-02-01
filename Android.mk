@@ -22,13 +22,13 @@ common_SRC_FILES := \
 
 common_CFLAGS := -Wall -fexceptions
 
-ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
+ifeq ($(TARGET_ARCH_VARIANT),armv7-a-neon)
     common_CFLAGS += -DLIBYUV_NEON
     common_SRC_FILES += \
-        files/source/compare_neon.cc.neon \
-        files/source/rotate_neon.cc.neon \
-        files/source/row_neon.cc.neon \
-        files/source/scale_neon.cc.neon
+        files/source/compare_neon.cc \
+        files/source/rotate_neon.cc \
+        files/source/row_neon.cc \
+        files/source/scale_neon.cc
 endif
 
 common_C_INCLUDES = $(LOCAL_PATH)/files/include
