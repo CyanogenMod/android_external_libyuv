@@ -5,18 +5,31 @@ ifeq ($(TARGET_ARCH),arm)
 LOCAL_PATH := $(call my-dir)
 
 common_SRC_FILES := \
+    files/source/compare.cc \
     files/source/convert.cc \
+    files/source/convert_argb.cc \
+    files/source/convert_from.cc \
+    files/source/cpu_id.cc \
     files/source/format_conversion.cc \
     files/source/planar_functions.cc \
-    files/source/row_posix.cc \
-    files/source/video_common.cc \
-    files/source/cpu_id.cc \
-    files/source/general.cc \
     files/source/rotate.cc \
-    files/source/row_table.cc \
-    files/source/scale.cc
+    files/source/rotate_argb.cc \
+    files/source/row_common.cc \
+    files/source/row_posix.cc \
+    files/source/scale.cc \
+    files/source/scale_argb.cc \
+    files/source/video_common.cc
 
 common_CFLAGS := -Wall -fexceptions
+
+ifeq ($(TARGET_ARCH_VARIANT),armv7-a-neon)
+    common_CFLAGS += -DLIBYUV_NEON
+    common_SRC_FILES += \
+        files/source/compare_neon.cc \
+        files/source/rotate_neon.cc \
+        files/source/row_neon.cc \
+        files/source/scale_neon.cc
+endif
 
 common_C_INCLUDES = $(LOCAL_PATH)/files/include
 
