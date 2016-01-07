@@ -49,7 +49,8 @@ LOCAL_CFLAGS += $(common_CFLAGS)
 LOCAL_C_INCLUDES += $(common_C_INCLUDES)
 LOCAL_SHARED_LIBRARIES := libjpeg
 
-LOCAL_MODULE:= libyuv_static
+LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/files/include
+LOCAL_MODULE := libyuv_static
 LOCAL_MODULE_TAGS := optional
 
 include $(BUILD_STATIC_LIBRARY)
