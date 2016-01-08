@@ -21,15 +21,6 @@ common_SRC_FILES := \
 
 common_CFLAGS := -Wall -fexceptions
 
-ifeq ($(TARGET_ARCH_VARIANT),armv7-a-neon)
-    common_CFLAGS += -DLIBYUV_NEON
-    common_SRC_FILES += \
-        files/source/compare_neon.cc \
-        files/source/rotate_neon.cc \
-        files/source/row_neon.cc \
-        files/source/scale_neon.cc
-endif
-
 common_C_INCLUDES = $(LOCAL_PATH)/files/include
 
 # For the device
@@ -48,7 +39,16 @@ LOCAL_CFLAGS += $(common_CFLAGS)
 LOCAL_C_INCLUDES += $(common_C_INCLUDES)
 
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/files/include
+
+ifeq ($(ARCH_ARM_HAVE_NEON),true)
+    LOCAL_CFLAGS_arm += -DLIBYUV_NEON
+    LOCAL_SRC_FILES_arm += \
+        files/source/compare_neon.cc \
+        files/source/rotate_neon.cc \
+        files/source/row_neon.cc \
+        files/source/scale_neon.cc
+endif
+
 LOCAL_MODULE := libyuv_static
-LOCAL_MODULE_TAGS := optional
 
 include $(BUILD_STATIC_LIBRARY)
